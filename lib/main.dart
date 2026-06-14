@@ -4,7 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'services/audio_player_handler.dart';
 import 'theme/app_theme.dart';
-import 'features/playlist/playlist_screen.dart';
+import 'features/home/home_shell.dart';
 import 'dev/mock_entry.dart';
 import 'models/article.dart';
 
@@ -47,7 +47,7 @@ class SyncNewsApp extends StatelessWidget {
       home: kDevMock
           // 開発検証: モック記事を同期プレーヤーに直行（Supabase不要）
           ? MockEntry(audio: audioHandler)
-          : PlaylistScreen(
+          : HomeShell(
               articles: const <Article>[], // TODO: Supabase からストリーム購読
               audio: audioHandler,
               onAddUrl: (url) async {

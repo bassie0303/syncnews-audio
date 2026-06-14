@@ -86,8 +86,21 @@ service = """
 """
 # </application> 直前に service/receiver を挿入
 xml = xml.replace("</application>", service + "    </application>", 1)
+
+# MainActivity の <activity> に共有(text/URL)受け取りの intent-filter を挿入
+if "android.intent.action.SEND" not in xml:
+    share_filter = """            <!-- ブラウザ等の共有メニューから text/URL を受け取る (PRD 3-1) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/*"/>
+            </intent-filter>
+"""
+    # 最初の </activity>（=MainActivity）の直前に挿入
+    xml = xml.replace("</activity>", share_filter + "        </activity>", 1)
+
 p.write_text(xml, encoding="utf-8")
-print("  ✓ 権限・service・receiver を挿入")
+print("  ✓ 権限・service・receiver・共有intent-filter を挿入")
 PY
 
 echo "▶ 5/5 完了。次の手順:"
