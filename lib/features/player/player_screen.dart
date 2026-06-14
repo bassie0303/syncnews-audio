@@ -193,7 +193,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 icon: const Icon(Icons.forward_10), // 15秒送り（最寄りアイコン）
                 onPressed: widget.audio.fastForward,
               ),
-              _SpeedButton(
+              _SpeedStepper(
                 speed: _speed,
                 onChanged: (s) {
                   setState(() => _speed = s);
@@ -241,21 +241,50 @@ class _LangToggle extends StatelessWidget {
   }
 }
 
-class _SpeedButton extends StatelessWidget {
+/// 再生速度ステッパー。− / ＋ で両方向に刻める（0.8〜2.0、両端で停止）。
+class _SpeedStepper extends StatelessWidget {
   final double speed;
   final ValueChanged<double> onChanged;
-  const _SpeedButton({required this.speed, required this.onChanged});
+  const _SpeedStepper({required this.speed, required this.onChanged});
 
-  static const _steps = [0.8, 1.0, 1.25, 1.5, 1.75, 2.0];
+  static const _steps = [0.8, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+  /// 現在速度に最も近いステップの index（浮動小数のズレに強い）。
+  int get _index {
+    var best = 0;
+    for (var i = 1; i < _steps.length; i++) {
+      if ((_steps[i] - speed).abs() < (_steps[best] - speed).abs()) best = i;
+    }
+    return best;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: () {
-        final next = _steps[(_steps.indexOf(speed) + 1) % _steps.length];
-        onChanged(next);
-      },
-      child: Text('${speed}x', style: const TextStyle(fontWeight: FontWeight.bold)),
+    final i = _index;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: '遅く',
+          icon: const Icon(Icons.remove_circle_outline),
+          onPressed: i > 0 ? () => onChanged(_steps[i - 1]) : null,
+        ),
+        SizedBox(
+          width: 46,
+          child: Text(
+            '${speed}x',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: '速く',
+          icon: const Icon(Icons.add_circle_outline),
+          onPressed: i < _steps.length - 1 ? () => onChanged(_steps[i + 1]) : null,
+        ),
+      ],
     );
   }
 }
