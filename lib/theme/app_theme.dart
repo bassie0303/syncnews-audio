@@ -55,7 +55,7 @@ class AppTheme {
       textTheme: GoogleFonts.notoSansJpTextTheme(
         ThemeData(brightness: brightness).textTheme,
       ).apply(bodyColor: textColor, displayColor: textColor),
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         elevation: 0,
         color: isDark ? AppColors.darkSurface : AppColors.lightSurface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),

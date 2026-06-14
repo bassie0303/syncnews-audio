@@ -61,6 +61,7 @@ class SyncAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   /// 速度変更 0.8〜2.0倍 (PRD 3-4)
+  @override
   Future<void> setSpeed(double speed) => _player.setSpeed(speed);
 
   /// 「30秒巻き戻し」: ボタン & SeekHandler 経由の rewind 両対応
