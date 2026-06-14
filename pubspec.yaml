@@ -1,0 +1,45 @@
+name: syncnews_audio
+description: テキスト同期型・多言語コンバートニュースリーダー
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- バックグラウンドオーディオ (克服すべき技術課題①) ---
+  just_audio: ^0.9.40           # 低レベル再生エンジン（速度変更・seek・positionStream）
+  audio_service: ^0.18.15       # OSメディアセッション / ロック画面 / イヤホン物理ボタン連携
+  audio_session: ^0.1.21        # オーディオフォーカス・割り込み制御
+
+  # --- バックエンド / 永続化 ---
+  supabase_flutter: ^2.5.6      # 記事メタ・同期タイムスタンプ・音声URL・認証(Phase2)
+
+  # --- 状態管理 / ユーティリティ ---
+  flutter_riverpod: ^2.5.1      # アプリ全体の状態管理
+  rxdart: ^0.27.7              # 複数ストリームの合成 (position + duration + state)
+  receive_sharing_intent: ^1.8.0 # ブラウザ共有メニューからのURL受け取り
+  cached_network_image: ^3.3.1
+  google_fonts: ^6.2.1
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.13.1
+
+# assets/icon/app_icon.svg を PNG 化したものを指定（後述のアイコン生成手順参照）
+flutter_launcher_icons:
+  image_path: "assets/icon/app_icon.png"
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  web:
+    generate: true
+    image_path: "assets/icon/app_icon.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/

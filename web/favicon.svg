@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- favicon: app_icon.svg と同一系譜 (ディープ・インディゴ) -->
+  <rect width="512" height="512" rx="115" fill="#4F46E5"/>
+  <g fill="none" stroke="#ffffff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 140 280 A 116 116 0 0 1 372 280"/>
+    <path d="M 140 280 v 64 a 28 28 0 0 0 28 28 h 8 a 16 16 0 0 0 16 -16 v -88 a 16 16 0 0 0 -16 -16 h -8 a 28 28 0 0 0 -28 28 z"/>
+    <path d="M 372 280 v 64 a 28 28 0 0 1 -28 28 h -8 a 16 16 0 0 1 -16 -16 v -88 a 16 16 0 0 1 16 -16 h 8 a 28 28 0 0 1 28 28 z"/>
+    <line x1="224" y1="312" x2="224" y2="344"/>
+    <line x1="256" y1="296" x2="256" y2="360"/>
+    <line x1="288" y1="312" x2="288" y2="344"/>
+  </g>
+</svg>
