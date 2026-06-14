@@ -43,3 +43,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon/
+    - assets/mock/   # 開発検証用モック記事（--dart-define=DEV_MOCK=true で使用）
