@@ -4,4 +4,6 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- デバッグ限定: ローカルHTTP(10.0.2.2等)での音声検証を許可。release には影響しない。 -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>
