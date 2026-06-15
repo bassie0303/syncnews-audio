@@ -80,8 +80,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _switchTextLang(String lang) {
     if (lang == _textLang) return;
     setState(() => _textLang = lang);
-    // テキストのセグメントが切り替わるので同期エンジンへ差し替え
-    _sync.setSegments(_displaySegments);
+    // テキストのセグメントを差し替えるが、ja/en は同じ index 体系なので
+    // 現在のハイライト位置は維持する（一時停止中もハイライトが消えない）。
+    _sync.setSegments(_displaySegments, keepIndex: true);
   }
 
   @override

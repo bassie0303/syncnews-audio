@@ -25,9 +25,16 @@ class SyncController extends ChangeNotifier {
 
   List<SyncSegment> get segments => _segments;
 
-  void setSegments(List<SyncSegment> segments) {
+  /// 同期対象のセグメントを差し替える。
+  ///
+  /// [keepIndex] が true の場合、現在のハイライト位置（文番号）を維持する。
+  /// テキスト言語の切替は ja/en が同じ index 体系なので、位置を保てば
+  /// 一時停止中でもハイライトが消えない。
+  void setSegments(List<SyncSegment> segments, {bool keepIndex = false}) {
+    final prev = currentIndex.value;
     _segments = segments;
-    currentIndex.value = -1;
+    currentIndex.value =
+        (keepIndex && prev >= 0 && prev < segments.length) ? prev : -1;
   }
 
   /// 音声位置 → セグメント探索。
