@@ -95,18 +95,34 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (status) {
-      ConvertStatus.pending => ('待機中', Colors.grey),
+      ConvertStatus.pending => ('受付済み・待機中', Colors.grey),
       ConvertStatus.processing => ('コンバート中…', Colors.orange),
       ConvertStatus.ready => ('準備完了', Colors.green),
       ConvertStatus.failed => ('失敗', Colors.red),
     };
+    // 処理中（待機中/コンバート中）は小さなスピナーを添えて進行中を明示する。
+    final inProgress =
+        status == ConvertStatus.pending || status == ConvertStatus.processing;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: color.withOpacity(0.15),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(label, style: TextStyle(color: color, fontSize: 12)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (inProgress) ...[
+            SizedBox(
+              width: 11,
+              height: 11,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Text(label, style: TextStyle(color: color, fontSize: 12)),
+        ],
+      ),
     );
   }
 }

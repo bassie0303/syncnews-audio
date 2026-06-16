@@ -41,11 +41,17 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _addUrl(String url) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
+      // 1. 行を作成すると一覧に「待機中」が即時出現（Realtime）。
       final id = await _repo.create(url);
-      await _convert.start(articleId: id, sourceUrl: url);
+      // 2. 受け付けたことを即フィードバック（変換完了は待たない）。
       messenger.showSnackBar(
-        const SnackBar(content: Text('変換を開始しました。準備完了まで少しお待ちください')),
+        const SnackBar(
+          content: Text('受け付けました。一覧で変換の進捗（コンバート中…→準備完了）が表示されます'),
+          duration: Duration(seconds: 4),
+        ),
       );
+      // 3. 変換ワーカーを起動。バックエンドは即 accepted を返すのでここはすぐ戻る。
+      await _convert.start(articleId: id, sourceUrl: url);
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('追加に失敗しました: $e')));
     }

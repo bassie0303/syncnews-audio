@@ -36,7 +36,7 @@ import base64  # noqa: E402
 import json  # noqa: E402
 
 import httpx  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
+from fastapi import BackgroundTasks, FastAPI  # noqa: E402
 from openai import AsyncOpenAI  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 from supabase import Client, create_client  # noqa: E402
@@ -84,17 +84,28 @@ def health() -> dict:
 
 
 @app.post("/api/convert")
-async def convert(req: ConvertRequest) -> dict:
-    """記事を変換して日英の tracks/segments を生成する。"""
+async def convert(req: ConvertRequest, background_tasks: BackgroundTasks) -> dict:
+    """変換を「受け付け」、実処理はバックグラウンドで行う（即時応答）。
+
+    同期で全変換（数分）を待つとアプリのフィードバックが遅れ、プロキシの
+    長時間リクエストtimeoutにも当たる。ここでは即 accepted を返し、進捗は
+    articles.status（pending→processing→ready/failed）で表現する。
+    """
+    background_tasks.add_task(_run_pipeline, req.article_id, req.source_url)
+    return {"ok": True, "accepted": True}
+
+
+async def _run_pipeline(article_id: str, source_url: str) -> None:
+    """記事を変換して日英の tracks/segments を生成する（バックグラウンド実行）。"""
     sb = _supabase()
-    sb.table("articles").update({"status": "processing"}).eq("id", req.article_id).execute()
+    sb.table("articles").update({"status": "processing"}).eq("id", article_id).execute()
 
     try:
         # 1. 本文抽出（言語判定込み）
-        title, body, lang = await extract_article(req.source_url)
+        title, body, lang = await extract_article(source_url)
         sb.table("articles").update(
             {"title": title, "source_lang": lang}
-        ).eq("id", req.article_id).execute()
+        ).eq("id", article_id).execute()
 
         # 2. 対向言語へ翻訳
         target: Lang = "en" if lang == "ja" else "ja"
@@ -105,7 +116,7 @@ async def convert(req: ConvertRequest) -> dict:
         for l, text in ((lang, body), (target, translated)):
             audio_bytes, segments = await synthesize_segments(text, l)
 
-            audio_path = f"{req.article_id}/{l}.mp3"
+            audio_path = f"{article_id}/{l}.mp3"
             sb.storage.from_("audio").upload(
                 audio_path, audio_bytes, {"content-type": "audio/mpeg", "upsert": "true"}
             )
@@ -113,7 +124,7 @@ async def convert(req: ConvertRequest) -> dict:
 
             track = (
                 sb.table("tracks")
-                .upsert({"article_id": req.article_id, "lang": l, "audio_url": public_url})
+                .upsert({"article_id": article_id, "lang": l, "audio_url": public_url})
                 .execute()
                 .data[0]
             )
@@ -130,15 +141,12 @@ async def convert(req: ConvertRequest) -> dict:
                 ]
             ).execute()
 
-        sb.table("articles").update({"status": "ready"}).eq("id", req.article_id).execute()
-        return {"ok": True}
-    except Exception as e:  # noqa: BLE001
+        sb.table("articles").update({"status": "ready"}).eq("id", article_id).execute()
+    except Exception:  # noqa: BLE001
         import traceback
 
-        tb = traceback.format_exc()
-        print(tb, flush=True)  # Railway ログに完全なトレースを残す
-        sb.table("articles").update({"status": "failed"}).eq("id", req.article_id).execute()
-        return {"ok": False, "error": str(e), "type": type(e).__name__}
+        print(traceback.format_exc(), flush=True)  # Railway ログに完全なトレースを残す
+        sb.table("articles").update({"status": "failed"}).eq("id", article_id).execute()
 
 
 # --- パイプライン各段（実装ポイント。MVPで埋める）---
