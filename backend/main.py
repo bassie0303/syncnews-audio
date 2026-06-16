@@ -195,6 +195,10 @@ def bookmarklet_page(request: Request) -> str:
     デプロイ先ドメインが変わっても貼り直し不要。
     """
     base = str(request.base_url).rstrip("/")
+    # Railway はプロキシ裏で TLS 終端するため base_url が http:// で返る。
+    # localhost 以外は https に正規化（https の記事ページから余計なリダイレクトを避ける）。
+    if base.startswith("http://") and "localhost" not in base and "127.0.0.1" not in base:
+        base = "https://" + base[len("http://") :]
     # javascript: スキームのワンライナー。現在ページURLを付けて /submit を小窓で開く。
     code = (
         "javascript:(function(){window.open('"
