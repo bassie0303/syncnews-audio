@@ -12,3 +12,7 @@ httpx==0.27.2
 
 # Supabase（Postgres tracks/segments + Storage 音声アップロード）
 supabase==2.10.0
+
+# 日本語の漢字読み精度向上（合成前にカナ読みへ変換。表示は原文の漢字を維持）
+sudachipy==0.6.11
+sudachidict-core==20260428

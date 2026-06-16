@@ -100,10 +100,10 @@ async def convert(req: ConvertRequest) -> dict:
         target: Lang = "en" if lang == "ja" else "ja"
         translated = await translate(body, target)
 
-        # 3. 各言語で TTS+TS -> 文集約 -> Storage/DB 保存
+        # 3. 各言語で 合成+TS -> 文集約 -> Storage/DB 保存
+        #    ja は漢字の誤読を避けるためカナ読みで合成（表示は原文の漢字）。
         for l, text in ((lang, body), (target, translated)):
-            audio_bytes, char_ts = await tts_with_timestamps(text, l)
-            segments = aggregate_to_sentences(char_ts)
+            audio_bytes, segments = await synthesize_segments(text, l)
 
             audio_path = f"{req.article_id}/{l}.mp3"
             sb.storage.from_("audio").upload(
@@ -262,28 +262,111 @@ async def tts_with_timestamps(text: str, lang: Lang) -> tuple[bytes, list[dict]]
     return audio, chars
 
 
-_SENT_END = re.compile(r"[。．.!?！？\n]")
+_SENT_END = "。．.!?！？\n"
 # 区切り記号・空白を除いて実体（文字）が残るか＝中身のある文かの判定用
 _CONTENT = re.compile(r"[^\s。．.!?！？、,…「」『』（）()]")
+
+
+def _is_break(s: str, i: int) -> bool:
+    """s[i] が文末区切りか。数字に挟まれた "." / "．"（小数点）は文末とみなさない。"""
+    ch = s[i]
+    if ch not in _SENT_END:
+        return False
+    if ch in ".．" and 0 < i < len(s) - 1 and s[i - 1].isdigit() and s[i + 1].isdigit():
+        return False  # 0.1 のような小数点
+    return True
 
 
 def aggregate_to_sentences(chars: list[dict]) -> list[dict]:
     """文字タイムスタンプを文(。/./!/?)単位の SyncSegment へ集約。
 
-    「。\\n」のような区切りの連続で生じる空セグメント（テキスト空・尺ゼロ）は捨てる。
-    これを残すと日英の文数が水増しされ、index 串刺しの言語切替がズレる。
+    ・「。\\n」のような区切りの連続で生じる空セグメントは捨てる（文数の水増し防止）。
+    ・"0.1" のような小数点は文末扱いしない。
     """
+    s = "".join(c["char"] for c in chars)
     out: list[dict] = []
-    buf = ""
-    start = chars[0]["start_ms"] if chars else 0
-    for c in chars:
-        buf += c["char"]
-        if _SENT_END.search(c["char"]):
-            text = buf.strip()
-            if _CONTENT.search(text):  # 記号・空白だけの文はスキップ
-                out.append({"text": text, "start_ms": start, "end_ms": c["end_ms"]})
-            buf, start = "", c["end_ms"]
-    tail = buf.strip()
-    if _CONTENT.search(tail):
-        out.append({"text": tail, "start_ms": start, "end_ms": chars[-1]["end_ms"]})
+    start_idx = 0
+    start_ms = chars[0]["start_ms"] if chars else 0
+    for i, c in enumerate(chars):
+        if _is_break(s, i):
+            text = s[start_idx : i + 1].strip()
+            if _CONTENT.search(text):
+                out.append({"text": text, "start_ms": start_ms, "end_ms": c["end_ms"]})
+            start_idx, start_ms = i + 1, c["end_ms"]
+    tail = s[start_idx:].strip()
+    if chars and _CONTENT.search(tail):
+        out.append({"text": tail, "start_ms": start_ms, "end_ms": chars[-1]["end_ms"]})
     return out
+
+
+def _split_sentences(text: str) -> list[str]:
+    """テキストを文単位の文字列に分割（aggregate_to_sentences と同じ境界規則）。
+    日本語の「表示用（漢字）」文と、合成カナのタイミング文を1:1で対応付けるため。"""
+    out: list[str] = []
+    start = 0
+    for i in range(len(text)):
+        if _is_break(text, i):
+            t = text[start : i + 1].strip()
+            if _CONTENT.search(t):
+                out.append(t)
+            start = i + 1
+    t = text[start:].strip()
+    if _CONTENT.search(t):
+        out.append(t)
+    return out
+
+
+# 漢字（CJK統合漢字＋々〆ヶ）を含むか
+_HAS_KANJI = re.compile(r"[一-鿿々〆ヶ]")
+_ja_tokenizer = None  # 初回利用時に遅延生成（辞書ロードが重いため）
+
+
+def _to_reading_ja(text: str) -> str:
+    """漢字の誤読を避けるため、形態素解析で読み（カナ）へ変換する。
+
+    ・漢字を含む語のみ読みに置換し、記号・数字・カナ・英字は原文のまま残す
+      （括弧が「キゴウ」と読まれる、数字が桁読みされる等を防ぐ）。
+    ・表示は元の漢字のまま。合成音声だけこの読みを使う。
+    """
+    global _ja_tokenizer
+    if _ja_tokenizer is None:
+        from sudachipy import dictionary, tokenizer
+
+        _ja_tokenizer = (
+            dictionary.Dictionary().create(),
+            tokenizer.Tokenizer.SplitMode.C,
+        )
+    tok, mode = _ja_tokenizer
+    parts: list[str] = []
+    for m in tok.tokenize(text, mode):
+        surface = m.surface()
+        reading = m.reading_form()
+        parts.append(reading if (_HAS_KANJI.search(surface) and reading) else surface)
+    return "".join(parts)
+
+
+async def synthesize_segments(display_text: str, lang: Lang) -> tuple[bytes, list[dict]]:
+    """表示テキストから、音声＋文単位セグメント（表示用テキスト＋タイムスタンプ）を生成。
+
+    ja は漢字の誤読を避けるため合成にはカナ読みを使い、segments の text には
+    元の漢字の文を入れる（タイミングはカナ合成から、文単位で1:1対応付け）。
+    en はそのまま。
+    """
+    speech_text = _to_reading_ja(display_text) if lang == "ja" else display_text
+    audio, char_ts = await tts_with_timestamps(speech_text, lang)
+    timing = aggregate_to_sentences(char_ts)
+
+    if lang != "ja":
+        return audio, timing
+
+    display_sents = _split_sentences(display_text)
+    n = min(len(timing), len(display_sents))
+    segments = [
+        {
+            "text": display_sents[i],
+            "start_ms": timing[i]["start_ms"],
+            "end_ms": timing[i]["end_ms"],
+        }
+        for i in range(n)
+    ]
+    return audio, segments
