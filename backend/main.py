@@ -69,12 +69,17 @@ class ConvertRequest(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
-    """Railway ヘルスチェック。必要キーの有無も返す。"""
+    """Railway ヘルスチェック。必要キーの有無＋UTF-8モードを返す。"""
+    import sys
+
     return {
         "ok": True,
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
         "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
         "supabase": bool(os.environ.get("SUPABASE_URL")),
+        # C ロケールでの日本語 ascii encode 失敗を防ぐ UTF-8 モードが効いているか
+        "utf8_mode": sys.flags.utf8_mode,
+        "preferred_encoding": __import__("locale").getpreferredencoding(False),
     }
 
 
@@ -128,8 +133,12 @@ async def convert(req: ConvertRequest) -> dict:
         sb.table("articles").update({"status": "ready"}).eq("id", req.article_id).execute()
         return {"ok": True}
     except Exception as e:  # noqa: BLE001
+        import traceback
+
+        tb = traceback.format_exc()
+        print(tb, flush=True)  # Railway ログに完全なトレースを残す
         sb.table("articles").update({"status": "failed"}).eq("id", req.article_id).execute()
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "type": type(e).__name__}
 
 
 # --- パイプライン各段（実装ポイント。MVPで埋める）---

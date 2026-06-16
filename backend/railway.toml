@@ -3,7 +3,10 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT}"
+# PYTHONUTF8=1 は必須。Linuxコンテナの C ロケールだと postgrest/httpx が
+# 日本語ペイロードを ascii で encode しようとして UnicodeEncodeError になる。
+# 起動コマンドで明示し、env 注入タイミングに依存させない。
+startCommand = "python -X utf8 -m uvicorn main:app --host 0.0.0.0 --port ${PORT}"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
