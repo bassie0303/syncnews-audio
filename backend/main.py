@@ -35,8 +35,11 @@ load_dotenv(_BACKEND_DIR / ".env", override=True)               # backend/.env
 import base64  # noqa: E402
 import json  # noqa: E402
 
+import html as _html  # noqa: E402
+
 import httpx  # noqa: E402
-from fastapi import BackgroundTasks, FastAPI  # noqa: E402
+from fastapi import BackgroundTasks, FastAPI, Request  # noqa: E402
+from fastapi.responses import HTMLResponse  # noqa: E402
 from openai import AsyncOpenAI  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 from supabase import Client, create_client  # noqa: E402
@@ -67,6 +70,10 @@ class ConvertRequest(BaseModel):
     source_url: str
 
 
+class SubmitRequest(BaseModel):
+    url: str
+
+
 @app.get("/api/health")
 def health() -> dict:
     """Railway ヘルスチェック。必要キーの有無＋UTF-8モードを返す。"""
@@ -93,6 +100,138 @@ async def convert(req: ConvertRequest, background_tasks: BackgroundTasks) -> dic
     """
     background_tasks.add_task(_run_pipeline, req.article_id, req.source_url)
     return {"ok": True, "accepted": True}
+
+
+@app.post("/api/submit")
+def submit(req: SubmitRequest, background_tasks: BackgroundTasks) -> dict:
+    """URL だけで「記事行の作成＋変換開始」を1発で行う（PC導線用）。
+
+    アプリは anon キーで articles に insert してから /api/convert を叩くが、
+    ブラウザのブックマークレット/拡張からは Supabase クライアントを持たない。
+    そこで backend(service_role) が行作成まで肩代わりし、URL のみで登録できる。
+    """
+    url = (req.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return {"ok": False, "error": "URLが不正です"}
+    sb = _supabase()
+    # source_lang は仮で ja。抽出時に実言語へ更新される（アプリと同じ作法）。
+    row = (
+        sb.table("articles")
+        .insert({"source_url": url, "source_lang": "ja"})
+        .execute()
+        .data[0]
+    )
+    background_tasks.add_task(_run_pipeline, row["id"], url)
+    return {"ok": True, "accepted": True, "article_id": row["id"]}
+
+
+@app.get("/submit", response_class=HTMLResponse)
+def submit_page(url: str = "") -> str:
+    """ブックマークレットが開くポップアップ。同一オリジンで /api/submit を叩く。
+
+    クロスオリジン preflight(CORS) を避けるため、登録ページを backend 自身が配信し、
+    そこから同一オリジンの fetch で POST する。結果を日本語で表示する。
+    """
+    safe_url = _html.escape(url, quote=True)
+    return f"""<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SyncNews Audio に登録</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+         margin: 0; padding: 28px; background: #f7f7fb; color: #1f2430; }}
+  .brand {{ font-weight: 700; color: #4F46E5; font-size: 14px; letter-spacing: .04em; }}
+  h1 {{ font-size: 20px; margin: 12px 0 8px; }}
+  .url {{ font-size: 12px; color: #6b7280; word-break: break-all;
+         background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; }}
+  .status {{ margin-top: 18px; font-size: 16px; min-height: 24px; }}
+  .ok {{ color: #16a34a; font-weight: 600; }}
+  .err {{ color: #dc2626; font-weight: 600; }}
+  .hint {{ margin-top: 16px; font-size: 12px; color: #6b7280; }}
+  button {{ margin-top: 18px; background: #4F46E5; color: #fff; border: 0;
+           border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer; }}
+</style></head>
+<body>
+  <div class="brand">SyncNews Audio</div>
+  <h1>記事を登録</h1>
+  <div class="url" id="url">{safe_url}</div>
+  <div class="status" id="status">登録中…</div>
+  <div class="hint">変換にはしばらくかかります。アプリの一覧で進捗（コンバート中…→準備完了）が表示されます。</div>
+  <button onclick="window.close()">閉じる</button>
+<script>
+  const url = {json.dumps(url)};
+  const $ = (id) => document.getElementById(id);
+  (async () => {{
+    if (!url) {{ $('status').className='status err'; $('status').textContent='URLが取得できませんでした'; return; }}
+    try {{
+      const res = await fetch('/api/submit', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ url }}),
+      }});
+      const data = await res.json();
+      if (data.ok) {{
+        $('status').className = 'status ok';
+        $('status').textContent = '✅ 登録しました！変換を開始しました。';
+      }} else {{
+        $('status').className = 'status err';
+        $('status').textContent = '登録に失敗: ' + (data.error || '不明なエラー');
+      }}
+    }} catch (e) {{
+      $('status').className = 'status err';
+      $('status').textContent = '通信に失敗しました: ' + e;
+    }}
+  }})();
+</script>
+</body></html>"""
+
+
+@app.get("/bookmarklet", response_class=HTMLResponse)
+def bookmarklet_page(request: Request) -> str:
+    """ブックマークレット導入ページ。リンクをブックマークバーにドラッグするだけ。
+
+    自分のオリジン(base_url)から /submit を開くブックマークレットを動的生成するので、
+    デプロイ先ドメインが変わっても貼り直し不要。
+    """
+    base = str(request.base_url).rstrip("/")
+    # javascript: スキームのワンライナー。現在ページURLを付けて /submit を小窓で開く。
+    code = (
+        "javascript:(function(){window.open('"
+        + base
+        + "/submit?url='+encodeURIComponent(location.href),"
+        "'syncnews','width=440,height=340');})();"
+    )
+    safe_code = _html.escape(code, quote=True)
+    return f"""<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SyncNews Audio ブックマークレット</title>
+<style>
+  body {{ font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+         max-width: 640px; margin: 0 auto; padding: 32px 20px; color: #1f2430; line-height: 1.7; }}
+  .brand {{ font-weight: 700; color: #4F46E5; letter-spacing: .04em; }}
+  h1 {{ font-size: 22px; }}
+  .bm {{ display: inline-block; background: #4F46E5; color: #fff !important;
+        text-decoration: none; border-radius: 10px; padding: 12px 20px;
+        font-size: 16px; font-weight: 600; margin: 12px 0; }}
+  ol {{ padding-left: 1.2em; }}
+  code {{ background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }}
+</style></head>
+<body>
+  <div class="brand">SyncNews Audio</div>
+  <h1>ブックマークレットで記事を登録</h1>
+  <p>下のボタンを<strong>ブックマークバーにドラッグ＆ドロップ</strong>してください。
+     以降、読みたいニュース記事のページでこのブックマークを押すだけで登録できます。</p>
+  <p><a class="bm" href="{safe_code}">📰 SyncNewsに登録</a></p>
+  <h2>使い方</h2>
+  <ol>
+    <li>ブラウザのブックマークバーを表示（Chrome/Edge: <code>Ctrl/⌘+Shift+B</code>）</li>
+    <li>上のボタンをバーへドラッグして追加</li>
+    <li>登録したいニュース記事を開いた状態でブックマークをクリック</li>
+    <li>小窓に「✅ 登録しました」と出れば完了。アプリの一覧に変換中として現れます</li>
+  </ol>
+</body></html>"""
 
 
 @app.delete("/api/articles/{article_id}")
