@@ -10,12 +10,16 @@ class PlaylistScreen extends StatelessWidget {
   final Future<void> Function(Article article) onOpen;
   final Future<void> Function(Article article) onDelete;
 
+  /// ElevenLabs の残クレジット（文字数）取得。null なら表示しない。
+  final Future<int?> Function()? fetchRemaining;
+
   const PlaylistScreen({
     super.key,
     required this.articles,
     required this.onAddUrl,
     required this.onOpen,
     required this.onDelete,
+    this.fetchRemaining,
     this.loading = false,
   });
 
@@ -51,10 +55,17 @@ class PlaylistScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('記事URLを貼り付け'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(hintText: 'https://...'),
-          autofocus: true,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (fetchRemaining != null) _RemainingCredits(fetch: fetchRemaining!),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(hintText: 'https://...'),
+              autofocus: true,
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -117,28 +128,42 @@ class _ArticleCard extends StatelessWidget {
             maxLines: 2, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 6),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _StatusChip(status: article.status),
-              if (article.publishedLabel != null) ...[
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.schedule,
-                          size: 13, color: Colors.grey.shade500),
-                      const SizedBox(width: 3),
-                      Flexible(
-                        child: Text(
-                          article.publishedLabel!,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.grey.shade600),
-                        ),
+              Row(
+                children: [
+                  _StatusChip(status: article.status),
+                  if (article.publishedLabel != null) ...[
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.schedule,
+                              size: 13, color: Colors.grey.shade500),
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text(
+                              article.publishedLabel!,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.grey.shade600),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
+                ],
+              ),
+              // 失敗時は理由（クレジット不足/変換エラー等）を赤字で表示。
+              if (article.status == ConvertStatus.failed &&
+                  article.error != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  article.error!,
+                  style: const TextStyle(fontSize: 12, color: Colors.red),
                 ),
               ],
             ],
@@ -203,6 +228,55 @@ class _StatusChip extends StatelessWidget {
           ],
           Text(label, style: TextStyle(color: color, fontSize: 12)),
         ],
+      ),
+    );
+  }
+}
+
+/// 追加ダイアログ上部に出す ElevenLabs 残クレジット表示。
+/// 取得中はスピナー、取得失敗時は何も出さない（登録の妨げにしない）。
+class _RemainingCredits extends StatelessWidget {
+  final Future<int?> Function() fetch;
+  const _RemainingCredits({required this.fetch});
+
+  static String _fmt(int n) => n.toString().replaceAllMapped(
+      RegExp(r'(\d)(?=(\d{3})+$)'), (m) => '${m[1]},');
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: FutureBuilder<int?>(
+        future: fetch(),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(width: 8),
+                Text('音声クレジット残量を確認中…',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            );
+          }
+          final remaining = snap.data;
+          if (remaining == null) return const SizedBox.shrink();
+          final low = remaining < 5000; // 残りわずかは警告色に
+          final color = low ? Colors.orange.shade800 : Colors.grey.shade600;
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(low ? Icons.warning_amber : Icons.bolt, size: 14, color: color),
+              const SizedBox(width: 4),
+              Text('音声クレジット残り ${_fmt(remaining)} 字',
+                  style: TextStyle(fontSize: 12, color: color)),
+            ],
+          );
+        },
       ),
     );
   }

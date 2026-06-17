@@ -15,6 +15,9 @@ class Article {
   /// 記事の公開日時（抽出できなければ null）。ローカルタイムに変換済み。
   final DateTime? publishedAt;
 
+  /// 失敗理由（status==failed のとき。クレジット不足/変換エラー等）。
+  final String? error;
+
   /// 言語コード -> トラック。MVP では {'ja': ..., 'en': ...}
   final Map<String, LocalizedTrack> tracks;
 
@@ -27,6 +30,7 @@ class Article {
     required this.createdAt,
     required this.tracks,
     this.publishedAt,
+    this.error,
   });
 
   LocalizedTrack? track(String lang) => tracks[lang];
@@ -49,6 +53,7 @@ class Article {
         publishedAt: json['published_at'] == null
             ? null
             : DateTime.parse(json['published_at'] as String).toLocal(),
+        error: json['error'] as String?,
         tracks: {
           for (final t in (json['tracks'] as List? ?? []))
             (t['lang'] as String):

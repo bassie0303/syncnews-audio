@@ -315,6 +315,22 @@ async def _run_pipeline(article_id: str, source_url: str) -> None:
         #    重いTTSの前にキャンセル（削除）を確認して無駄な課金を避ける。
         if not _article_exists(sb, article_id):
             return
+
+        # クレジットガード: 重いTTSの前に「必要文字数」と「残量」を比較する。
+        # 足りなければ TTS を一切実行せず failed にして理由を残し、課金を防ぐ。
+        # 残量取得に失敗したらガードせず従来通り続行（外部API障害で止めない）。
+        needed = _tts_char_count(body, lang) + _tts_char_count(translated, target)
+        try:
+            remaining = (await _eleven_subscription())["remaining"]
+        except Exception:  # noqa: BLE001
+            remaining = None
+        if remaining is not None and needed > remaining:
+            msg = f"ElevenLabsクレジット不足（必要 {needed:,} 字 / 残 {remaining:,} 字）"
+            sb.table("articles").update(
+                {"status": "failed", "error": msg}
+            ).eq("id", article_id).execute()
+            return
+
         for l, text in ((lang, body), (target, translated)):
             audio_bytes, segments = await synthesize_segments(text, l)
 
@@ -344,11 +360,13 @@ async def _run_pipeline(article_id: str, source_url: str) -> None:
             ).execute()
 
         sb.table("articles").update({"status": "ready"}).eq("id", article_id).execute()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         import traceback
 
         print(traceback.format_exc(), flush=True)  # Railway ログに完全なトレースを残す
-        sb.table("articles").update({"status": "failed"}).eq("id", article_id).execute()
+        sb.table("articles").update(
+            {"status": "failed", "error": f"変換エラー: {exc}"[:300]}
+        ).eq("id", article_id).execute()
 
 
 # --- パイプライン各段（実装ポイント。MVPで埋める）---

@@ -12,6 +12,7 @@ create table articles (
   source_lang text not null check (source_lang in ('ja','en')),
   status      convert_status not null default 'pending',
   published_at timestamptz,                  -- 記事の公開日時（抽出時に取得・取れなければnull）
+  error       text,                          -- 失敗理由（クレジット不足/変換エラー等。表示用）
   created_at  timestamptz not null default now()
 );
 

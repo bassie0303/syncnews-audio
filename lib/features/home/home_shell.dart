@@ -107,6 +107,7 @@ class _HomeShellState extends State<HomeShell> {
           onAddUrl: _addUrl,
           onOpen: _open,
           onDelete: _delete,
+          fetchRemaining: _convert.remainingCredits,
         );
       },
     );
