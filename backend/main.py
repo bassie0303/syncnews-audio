@@ -627,11 +627,27 @@ _HAS_KANJI = re.compile(r"[一-鿿々〆ヶ]")
 _ja_tokenizer = None  # 初回利用時に遅延生成（辞書ロードが重いため）
 
 
+def _kata_to_hira(s: str) -> str:
+    """カタカナをひらがなへ変換（長音符ー・中点・数字・英字等はそのまま）。
+
+    sudachi の reading_form はカタカナで返るが、合成テキストに長いカタカナ列が
+    並ぶとニューラルTTSが『外来語/強調』的な区切れた韻律になり、語の途中や
+    長音符でつっかえる。読みをひらがなにすると自然なかな文に近づき韻律が安定する
+    （音は同じ。本来のカタカナ語＝サーバー等は別トークンで原文のまま残る）。
+    """
+    out: list[str] = []
+    for ch in s:
+        o = ord(ch)
+        out.append(chr(o - 0x60) if 0x30A1 <= o <= 0x30F6 else ch)
+    return "".join(out)
+
+
 def _to_reading_ja(text: str) -> str:
-    """漢字の誤読を避けるため、形態素解析で読み（カナ）へ変換する。
+    """漢字の誤読を避けるため、形態素解析で読み（かな）へ変換する。
 
     ・漢字を含む語のみ読みに置換し、記号・数字・カナ・英字は原文のまま残す
       （括弧が「キゴウ」と読まれる、数字が桁読みされる等を防ぐ）。
+    ・読みはひらがなにする（カタカナ過多による不自然な区切れを防ぐ）。
     ・表示は元の漢字のまま。合成音声だけこの読みを使う。
     """
     global _ja_tokenizer
@@ -647,7 +663,10 @@ def _to_reading_ja(text: str) -> str:
     for m in tok.tokenize(text, mode):
         surface = m.surface()
         reading = m.reading_form()
-        parts.append(reading if (_HAS_KANJI.search(surface) and reading) else surface)
+        if _HAS_KANJI.search(surface) and reading:
+            parts.append(_kata_to_hira(reading))
+        else:
+            parts.append(surface)
     return "".join(parts)
 
 
