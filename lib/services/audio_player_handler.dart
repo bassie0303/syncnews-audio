@@ -17,6 +17,9 @@ class SyncAudioHandler extends BaseAudioHandler with SeekHandler {
   /// 割り込み（電話・他アプリ）で一時停止したか。終了後の自動再開判定に使う。
   bool _interruptedWhilePlaying = false;
 
+  /// 記事全体のリピート再生フラグ。末尾到達時に先頭へ戻して再生し直す。
+  bool _repeat = false;
+
   /// 同期プレーヤーが購読する再生位置（ミリ秒精度）。
   Stream<Duration> get positionStream => _player.positionStream;
   Stream<Duration?> get durationStream => _player.durationStream;
@@ -25,6 +28,16 @@ class SyncAudioHandler extends BaseAudioHandler with SeekHandler {
   SyncAudioHandler() {
     // just_audio の状態を audio_service(=OSセッション) の PlaybackState へ橋渡し。
     _player.playbackEventStream.map(_toPlaybackState).pipe(playbackState);
+
+    // リピート: 記事末尾に達したら、ONなら先頭へ戻して再生し直す。
+    // LoopMode.one は setUrl 単一音源だと環境により効かないため、完了イベントで
+    // 明示的にループさせる（確実・予測可能）。
+    _player.processingStateStream.listen((state) {
+      if (state == ProcessingState.completed && _repeat) {
+        _player.seek(Duration.zero);
+        _player.play();
+      }
+    });
   }
 
   /// オーディオフォーカスと割り込み制御を設定する（main から init 時に1回）。
@@ -112,10 +125,12 @@ class SyncAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> setSpeed(double speed) => _player.setSpeed(speed);
 
-  /// 記事全体のリピート再生。LoopMode.one は「現在の音源（=この記事）」を
-  /// 末尾まで再生後に先頭へ戻して繰り返す。OFF で通常再生に戻す。
-  Future<void> setRepeat(bool on) =>
-      _player.setLoopMode(on ? LoopMode.one : LoopMode.off);
+  /// 記事全体のリピート再生のON/OFF。実際のループは完了イベント監視で行う
+  /// （constructor の processingStateStream 参照）。LoopMode は使わない
+  /// （単一音源だと完了イベントが来ず、逆にループ検知できなくなるため OFF のまま）。
+  Future<void> setRepeat(bool on) async {
+    _repeat = on;
+  }
 
   /// 「30秒巻き戻し」: ボタン & SeekHandler 経由の rewind 両対応
   @override
