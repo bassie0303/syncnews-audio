@@ -18,6 +18,18 @@ class ArticleRepository {
         .map((rows) => rows.map(Article.fromJson).toList());
   }
 
+  /// 記事一覧（メタのみ）を一度だけ取得する（プルリフレッシュ／復帰時の即時補完用）。
+  /// Realtime ストリームが切れている間でも確実に最新を取り直せる。
+  Future<List<Article>> fetchList() async {
+    final rows = await _db
+        .from('articles')
+        .select()
+        .order('created_at', ascending: false);
+    return (rows as List)
+        .map((r) => Article.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
   /// 変換対象の articles 行を作成し id を返す（status は既定の pending）。
   /// title / source_lang は変換時に extract 結果で上書きされるため暫定値でよい。
   Future<String> create(String sourceUrl) async {

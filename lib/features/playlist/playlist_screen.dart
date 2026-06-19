@@ -13,6 +13,9 @@ class PlaylistScreen extends StatelessWidget {
   /// ElevenLabs の残クレジット（文字数）取得。null なら表示しない。
   final Future<int?> Function()? fetchRemaining;
 
+  /// プルリフレッシュで一覧を取り直す。null ならリフレッシュ無効。
+  final Future<void> Function()? onRefresh;
+
   const PlaylistScreen({
     super.key,
     required this.articles,
@@ -20,6 +23,7 @@ class PlaylistScreen extends StatelessWidget {
     required this.onOpen,
     required this.onDelete,
     this.fetchRemaining,
+    this.onRefresh,
     this.loading = false,
   });
 
@@ -34,18 +38,30 @@ class PlaylistScreen extends StatelessWidget {
       ),
       body: loading && articles.isEmpty
           ? const Center(child: CircularProgressIndicator())
-          : articles.isEmpty
-              ? const Center(child: Text('記事URLを追加してコンバートを始めましょう'))
-              : ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: articles.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, i) => _ArticleCard(
-                    article: articles[i],
-                    onOpen: onOpen,
-                    onDelete: onDelete,
-                  ),
-                ),
+          : RefreshIndicator(
+              // onRefresh が無ければ何もしない Future を返す（プル無効相当）。
+              onRefresh: onRefresh ?? () async {},
+              child: articles.isEmpty
+                  // 空でもプルできるよう、必ずスクロール可能にする。
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(height: 160),
+                        Center(child: Text('記事URLを追加してコンバートを始めましょう')),
+                      ],
+                    )
+                  : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.all(16),
+                      itemCount: articles.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (context, i) => _ArticleCard(
+                        article: articles[i],
+                        onOpen: onOpen,
+                        onDelete: onDelete,
+                      ),
+                    ),
+            ),
     );
   }
 

@@ -8,12 +8,19 @@ import '../../services/audio_player_handler.dart';
 import '../../theme/app_theme.dart';
 import 'sync_controller.dart';
 
-/// プレーヤーの言語選好（記事をまたいで引き継ぐ）。
-/// 最後に使った「表示×音声」のプリセットを、次に開く記事の既定にする。
+/// プレーヤーの言語選好。
+/// - `textLang`/`audioLang`: 最後に使った「表示×音声」。新しく開く記事の既定にする（引き継ぎ）。
+/// - `perArticle`: 記事ごとに最後に選んだ組。同じ記事を開き直したらそれを優先復元する。
 /// アプリ起動中のみ保持（永続化は将来検討）。
 class PlaybackPrefs {
   static String textLang = 'ja';
   static String audioLang = 'ja';
+  static final Map<String, (String, String)> perArticle = {};
+
+  /// 記事を開くときの初期 (textLang, audioLang)。記事個別の記録があればそれを、
+  /// なければ直近に使った選好を返す。
+  static (String, String) initialFor(String articleId) =>
+      perArticle[articleId] ?? (textLang, audioLang);
 }
 
 /// 同期プレーヤー詳細画面（PRD 3-3 / 3-4）。
@@ -35,8 +42,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final SyncController _sync = SyncController(widget.audio);
   final ItemScrollHelper _scroll = ItemScrollHelper();
 
-  String _textLang = PlaybackPrefs.textLang; // 表示テキストの言語（前回選好を引き継ぐ）
-  String _audioLang = PlaybackPrefs.audioLang; // 再生音声の言語（同上）
+  late String _textLang; // 表示テキストの言語（記事個別の記録 or 直近選好で初期化）
+  late String _audioLang; // 再生音声の言語（同上）
   double _speed = 1.0;
   bool _repeat = false; // 記事全体のリピート再生
 
@@ -57,6 +64,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    // 記事ごとの形式選択を復元（無ければ直近の選好を引き継ぐ）。
+    final (t, a) = PlaybackPrefs.initialFor(widget.article.id);
+    _textLang = t;
+    _audioLang = a;
     _loadAudio(_audioLang, initial: true);
     _sync.setSegments(_displaySegments);
     // 音声インデックス→テキストの自動スクロール
@@ -111,6 +122,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
     setState(() => _audioLang = lang);
     PlaybackPrefs.audioLang = lang; // 次の記事へ引き継ぐ
+    _savePerArticle(); // この記事個別にも記録
     final track = widget.article.track(lang)!;
     await widget.audio.loadTrack(
       url: track.audioUrl,
@@ -128,9 +140,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (lang == _textLang) return;
     setState(() => _textLang = lang);
     PlaybackPrefs.textLang = lang; // 次の記事へ引き継ぐ
+    _savePerArticle(); // この記事個別にも記録
     // テキストのセグメントを差し替えるが、ja/en は同じ index 体系なので
     // 現在のハイライト位置は維持する（一時停止中もハイライトが消えない）。
     _sync.setSegments(_displaySegments, keepIndex: true);
+  }
+
+  /// いまの表示/音声の組をこの記事の選択として記録する。
+  void _savePerArticle() {
+    PlaybackPrefs.perArticle[widget.article.id] = (_textLang, _audioLang);
   }
 
   /// 再生位置を記事の先頭へ戻す（同期ハイライトも追従する）。

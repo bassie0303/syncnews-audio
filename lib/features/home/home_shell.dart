@@ -26,15 +26,42 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   final ArticleRepository _repo = ArticleRepository();
   final ShareReceiver _share = ShareReceiver();
   late final ConvertApi _convert = ConvertApi(widget.convertApiBase);
 
+  // Realtime 購読ストリーム。バックグラウンド復帰時に作り直して再購読する。
+  late Stream<List<Article>> _stream = _repo.watch();
+  // 直前に表示できた一覧。復帰中の再購読で一瞬「空」が流れても直前を出し続ける
+  // ことで「一覧が空になる」不具合を防ぐ。
+  List<Article> _last = const [];
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _share.start(_addUrl); // 共有メニューからのURLも同じ導線へ
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // 復帰時: Realtime が切れている可能性があるので購読を作り直し、
+      // さらに一度だけ取得して即座に最新で埋める（空表示の回避）。
+      setState(() => _stream = _repo.watch());
+      _refresh();
+    }
+  }
+
+  /// 一覧を一度だけ取り直して直前データを更新（プルリフレッシュ／復帰時）。
+  Future<void> _refresh() async {
+    try {
+      final list = await _repo.fetchList();
+      if (mounted) setState(() => _last = list);
+    } catch (_) {
+      // 取得失敗時は直前データを維持（無理に空にしない）。
+    }
   }
 
   /// URL受け取り → articles行作成 → 変換ワーカー起動。
@@ -92,6 +119,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _share.dispose();
     super.dispose();
   }
@@ -99,14 +127,22 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Article>>(
-      stream: _repo.watch(),
+      stream: _stream,
       builder: (context, snapshot) {
+        // Realtime からデータが来たら直前データを更新。
+        if (snapshot.hasData) _last = snapshot.data!;
+        // 表示は「最新があればそれ／無ければ直前データ」。再購読中の空表示を避ける。
+        final articles = snapshot.data ?? _last;
+        // ローディングは「まだ一度も表示データが無い」ときだけ。
+        final loading =
+            snapshot.connectionState == ConnectionState.waiting && _last.isEmpty;
         return PlaylistScreen(
-          articles: snapshot.data ?? const <Article>[],
-          loading: snapshot.connectionState == ConnectionState.waiting,
+          articles: articles,
+          loading: loading,
           onAddUrl: _addUrl,
           onOpen: _open,
           onDelete: _delete,
+          onRefresh: _refresh,
           fetchRemaining: _convert.remainingCredits,
         );
       },
