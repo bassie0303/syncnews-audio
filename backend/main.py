@@ -93,6 +93,21 @@ def health() -> dict:
     }
 
 
+@app.get("/api/diag")
+def diag() -> dict:
+    """デプロイ診断: Azure SDK のネイティブ依存が解決でき import 可能か（課金なし）。"""
+    out: dict = {"azure_region": os.environ.get("AZURE_SPEECH_REGION")}
+    try:
+        import azure.cognitiveservices.speech as speechsdk  # noqa: F401
+
+        out["azure_import"] = True
+    except Exception as e:  # noqa: BLE001
+        out["azure_import"] = False
+        out["azure_error"] = str(e)
+    out["azure_key_set"] = bool(os.environ.get("AZURE_SPEECH_KEY"))
+    return out
+
+
 @app.post("/api/convert")
 async def convert(req: ConvertRequest, background_tasks: BackgroundTasks) -> dict:
     """変換を「受け付け」、実処理はバックグラウンドで行う（即時応答）。
