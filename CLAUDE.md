@@ -72,6 +72,7 @@ curl -s localhost:8000/api/health | jq   # 各APIキーの有無を返す
 | `AZURE_SPEECH_KEY` | **backend専用**。日本語TTS(Azure Speech)。F0無料枠。クライアントに出さない |
 | `AZURE_SPEECH_REGION` | backend。Azure Speech のリージョン（例 `eastus`） |
 | `AZURE_VOICE_JA` | backend(任意)。日本語の声。既定 `ja-JP-NanamiNeural` |
+| `DATABASE_URL` | **backend専用**。Postgres直結（金庫 `syncnews_vault` 用。REST不可なので直結必須）。Supabase Session pooler の URI（`postgresql://postgres.<ref>:<pw>@aws-1-<region>.pooler.supabase.com:5432/postgres`）。クライアントに出さない |
 
 backend は `claude_test/.env`（共有）→ `backend/.env`（個別）の順で読み込み、いずれも `override=True`。
 
