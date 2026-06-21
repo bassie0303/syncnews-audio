@@ -1,17 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../models/article.dart';
-import '../../services/article_repository.dart';
 import '../../services/audio_player_handler.dart';
 import '../../services/convert_api.dart';
 import '../../services/share_receiver.dart';
 import '../player/player_screen.dart';
 import '../playlist/playlist_screen.dart';
 
-/// アプリの通常ホーム。
-///  - Supabase の記事一覧をリアルタイム購読して表示
-///  - URLペースト/共有メニューで受け取ったURL → 記事行作成 + 変換ワーカー起動
-///  - 準備完了の記事タップ → tracks/segments を取得してプレーヤーへ
+/// 認証済みユーザーのホーム。二スキーマ構成では、第三者著作物（本文/タイトル/音声）は
+/// 公開APIに出さず、すべて本人認証付きの**ゲート経由**（ConvertApi）で扱う:
+///  - 一覧:   GET /api/articles
+///  - 登録:   POST /api/articles
+///  - 削除:   DELETE /api/articles/{id}
+///  - 再生:   GET /api/playback/{id} で本文＋署名URLを取得してプレーヤーへ
+/// 変換中の記事があるあいだだけ数秒ごとに再取得して status を反映する。
 class HomeShell extends StatefulWidget {
   const HomeShell({
     super.key,
@@ -27,65 +32,73 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
-  final ArticleRepository _repo = ArticleRepository();
   final ShareReceiver _share = ShareReceiver();
   late final ConvertApi _convert = ConvertApi(widget.convertApiBase);
 
-  // Realtime 購読ストリーム。バックグラウンド復帰時に作り直して再購読する。
-  late Stream<List<Article>> _stream = _repo.watch();
-  // 直前に表示できた一覧。復帰中の再購読で一瞬「空」が流れても直前を出し続ける
-  // ことで「一覧が空になる」不具合を防ぐ。
-  List<Article> _last = const [];
+  List<Article> _articles = const [];
+  bool _loading = true;
+  Timer? _poll;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _share.start(_addUrl); // 共有メニューからのURLも同じ導線へ
+    _refresh();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      // 復帰時: Realtime が切れている可能性があるので購読を作り直し、
-      // さらに一度だけ取得して即座に最新で埋める（空表示の回避）。
-      setState(() => _stream = _repo.watch());
-      _refresh();
-    }
+    if (state == AppLifecycleState.resumed) _refresh();
   }
 
-  /// 一覧を一度だけ取り直して直前データを更新（プルリフレッシュ／復帰時）。
+  bool get _anyPending => _articles.any((a) =>
+      a.status == ConvertStatus.pending ||
+      a.status == ConvertStatus.processing);
+
+  /// 一覧を取り直す（初回／復帰／プルリフレッシュ／登録・削除後／ポーリング）。
   Future<void> _refresh() async {
     try {
-      final list = await _repo.fetchList();
-      if (mounted) setState(() => _last = list);
+      final list = await _convert.fetchArticles();
+      if (!mounted) return;
+      setState(() {
+        _articles = list;
+        _loading = false;
+      });
+      _syncPolling();
     } catch (_) {
-      // 取得失敗時は直前データを維持（無理に空にしない）。
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  /// URL受け取り → articles行作成 → 変換ワーカー起動。
+  /// 変換中の記事があるあいだだけ数秒間隔で再取得する（status の自動反映）。
+  void _syncPolling() {
+    if (_anyPending && _poll == null) {
+      _poll = Timer.periodic(const Duration(seconds: 4), (_) => _refresh());
+    } else if (!_anyPending && _poll != null) {
+      _poll!.cancel();
+      _poll = null;
+    }
+  }
+
+  /// URL受け取り → 認証付きで登録（バックエンドが所有者付きで作成＋変換開始）。
   Future<void> _addUrl(String url) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      // 1. 行を作成すると一覧に「待機中」が即時出現（Realtime）。
-      final id = await _repo.create(url);
-      // 2. 受け付けたことを即フィードバック（変換完了は待たない）。
+      await _convert.createArticle(url);
       messenger.showSnackBar(
         const SnackBar(
           content: Text('受け付けました。一覧で変換の進捗（コンバート中…→準備完了）が表示されます'),
           duration: Duration(seconds: 4),
         ),
       );
-      // 3. 変換ワーカーを起動。バックエンドは即 accepted を返すのでここはすぐ戻る。
-      await _convert.start(articleId: id, sourceUrl: url);
+      await _refresh();
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('追加に失敗しました: $e')));
     }
   }
 
-  /// 記事の削除（進行中ならコンバートのキャンセルを兼ねる）。
-  /// 実体削除は backend(service_role) 経由。一覧からは Realtime で除去される。
+  /// 記事の削除（進行中ならコンバートのキャンセルを兼ねる）。本人のみ。
   Future<void> _delete(Article article) async {
     final messenger = ScaffoldMessenger.of(context);
     final canceling = article.status == ConvertStatus.pending ||
@@ -95,16 +108,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       messenger.showSnackBar(
         SnackBar(content: Text(canceling ? 'コンバートをキャンセルしました' : '削除しました')),
       );
+      await _refresh();
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('操作に失敗しました: $e')));
     }
   }
 
-  /// 一覧の記事（メタのみ）→ 再生用にフル取得してプレーヤーへ遷移。
+  /// 準備完了の記事 → 再生用フル取得（本文＋署名URL）してプレーヤーへ。
   Future<void> _open(Article article) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final full = await _repo.fetchFull(article.id);
+      final full = await _convert.fetchPlayback(article);
       if (!mounted) return;
       Navigator.push(
         context,
@@ -117,8 +131,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _logout() async {
+    await Supabase.instance.client.auth.signOut();
+  }
+
   @override
   void dispose() {
+    _poll?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _share.dispose();
     super.dispose();
@@ -126,26 +145,15 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<Article>>(
-      stream: _stream,
-      builder: (context, snapshot) {
-        // Realtime からデータが来たら直前データを更新。
-        if (snapshot.hasData) _last = snapshot.data!;
-        // 表示は「最新があればそれ／無ければ直前データ」。再購読中の空表示を避ける。
-        final articles = snapshot.data ?? _last;
-        // ローディングは「まだ一度も表示データが無い」ときだけ。
-        final loading =
-            snapshot.connectionState == ConnectionState.waiting && _last.isEmpty;
-        return PlaylistScreen(
-          articles: articles,
-          loading: loading,
-          onAddUrl: _addUrl,
-          onOpen: _open,
-          onDelete: _delete,
-          onRefresh: _refresh,
-          fetchRemaining: _convert.remainingCredits,
-        );
-      },
+    return PlaylistScreen(
+      articles: _articles,
+      loading: _loading,
+      onAddUrl: _addUrl,
+      onOpen: _open,
+      onDelete: _delete,
+      onRefresh: _refresh,
+      onLogout: _logout,
+      fetchRemaining: _convert.remainingCredits,
     );
   }
 }

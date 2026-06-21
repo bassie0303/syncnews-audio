@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/audio_player_handler.dart';
 import 'services/permissions.dart';
 import 'theme/app_theme.dart';
+import 'features/auth/auth_gate.dart';
 import 'features/home/home_shell.dart';
 import 'dev/mock_entry.dart';
 
@@ -61,9 +62,12 @@ class SyncNewsApp extends StatelessWidget {
           // 開発検証: モック記事を同期プレーヤーに直行（Supabase不要）
           ? MockEntry(audio: audioHandler)
           : _supabaseReady
-              ? HomeShell(
-                  audio: audioHandler,
-                  convertApiBase: _convertApiBase,
+              // 認証ゲート: 未ログインはログイン画面、ログイン済みはホーム。
+              ? AuthGate(
+                  child: HomeShell(
+                    audio: audioHandler,
+                    convertApiBase: _convertApiBase,
+                  ),
                 )
               : const _SetupNeededScreen(),
     );

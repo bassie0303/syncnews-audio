@@ -16,6 +16,9 @@ class PlaylistScreen extends StatelessWidget {
   /// プルリフレッシュで一覧を取り直す。null ならリフレッシュ無効。
   final Future<void> Function()? onRefresh;
 
+  /// ログアウト。null なら表示しない。
+  final Future<void> Function()? onLogout;
+
   const PlaylistScreen({
     super.key,
     required this.articles,
@@ -24,13 +27,40 @@ class PlaylistScreen extends StatelessWidget {
     required this.onDelete,
     this.fetchRemaining,
     this.onRefresh,
+    this.onLogout,
     this.loading = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('SyncNews Audio')),
+      appBar: AppBar(
+        title: const Text('SyncNews Audio'),
+        actions: [
+          if (onLogout != null)
+            IconButton(
+              tooltip: 'ログアウト',
+              icon: const Icon(Icons.logout),
+              onPressed: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('ログアウトしますか？'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('キャンセル')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('ログアウト')),
+                    ],
+                  ),
+                );
+                if (ok == true) await onLogout!();
+              },
+            ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         icon: const Icon(Icons.add_link),
         label: const Text('記事URLを追加'),
