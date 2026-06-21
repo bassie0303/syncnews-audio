@@ -405,12 +405,19 @@ def bookmarklet_page(request: Request) -> str:
 
 
 @app.delete("/api/articles/{article_id}")
-def delete_article(article_id: str) -> dict:
+async def delete_article(
+    article_id: str, authorization: Optional[str] = Header(default=None)
+) -> dict:
     """記事を削除する（履歴削除／進行中ならコンバートのキャンセルを兼ねる）。
 
-    Storage の音声を削除し、articles 行を削除（cascade で tracks/segments も消える）。
-    進行中の変換は、パイプラインのチェックポイントが行の消失を検知して中断する。
+    認証ヘッダがあれば新経路（本人確認のうえ syncnews 行＋非公開バケットを削除）、
+    無ければ旧経路（anon・public）。移行期は両対応する。
     """
+    if authorization:
+        user_id = await _current_user(authorization)
+        return await _delete_article_v2(article_id, user_id)
+
+    # 旧経路（anon・public、移行期の互換）
     sb = _supabase()
     try:
         items = sb.storage.from_("audio").list(article_id)
@@ -1014,3 +1021,143 @@ async def build_playback_payload(article_id: str, owner_id: str) -> dict | None:
         )
         audio[lang] = signed.get("signedURL") or signed.get("signedUrl")
     return {"title": title, "segments": segments, "audio": audio}
+
+
+# ─────────────────────────────────────────────────────────────
+# Stage4: 認証付き登録 + 新経路パイプライン（syncnews + vault + 非公開バケット）
+# 旧 /api/convert・/api/submit（anon・public）は移行期の互換として残す。
+# ─────────────────────────────────────────────────────────────
+
+
+async def _pg_set_status(article_id: str, status: str, error: str = None) -> None:
+    conn = await _pg()
+    try:
+        await conn.execute(
+            "update syncnews.articles set status = $2, error = $3 where id = $1",
+            article_id, status, error,
+        )
+    finally:
+        await conn.close()
+
+
+async def _pg_article_exists(article_id: str) -> bool:
+    conn = await _pg()
+    try:
+        return bool(
+            await conn.fetchval("select 1 from syncnews.articles where id = $1", article_id)
+        )
+    finally:
+        await conn.close()
+
+
+async def _run_pipeline_v2(article_id: str, owner_id: str, source_url: str) -> None:
+    """新経路の変換: 抽出→翻訳→TTS→ persist_article_new（syncnews/vault/非公開バケット）。
+    状態は syncnews.articles.status（直結更新）。本文/タイトル/音声は金庫・非公開へ。"""
+    await _pg_set_status(article_id, "processing")
+    try:
+        title, body, lang, published_at = await extract_article(source_url)
+        if not await _pg_article_exists(article_id):  # キャンセル(削除)済み
+            return
+
+        target: Lang = "en" if lang == "ja" else "ja"
+        translated = await translate(body, target)
+        if not await _pg_article_exists(article_id):
+            return
+
+        # クレジットガード（ElevenLabs=英語のみ。日本語はAzure F0無料）
+        english_text = body if lang == "en" else translated
+        needed = len(english_text)
+        try:
+            remaining = (await _eleven_subscription())["remaining"]
+        except Exception:  # noqa: BLE001
+            remaining = None
+        if remaining is not None and needed > remaining:
+            await _pg_set_status(
+                article_id,
+                "failed",
+                f"ElevenLabsクレジット不足（必要 {needed:,} 字 / 残 {remaining:,} 字）",
+            )
+            return
+
+        segments_by_lang: dict[str, list[dict]] = {}
+        audio_by_lang: dict[str, bytes] = {}
+        for l, text in ((lang, body), (target, translated)):
+            audio_bytes, segments = await synthesize_segments(text, l)
+            segments_by_lang[l] = segments
+            audio_by_lang[l] = audio_bytes
+
+        pub_dt = None
+        if published_at:
+            try:
+                pub_dt = _dt.datetime.fromisoformat(published_at)
+            except ValueError:
+                pub_dt = None
+
+        await persist_article_new(
+            article_id=article_id,
+            owner_id=owner_id,
+            source_url=source_url,
+            source_lang=lang,
+            status="ready",
+            title=title,
+            published_at=pub_dt,
+            segments_by_lang=segments_by_lang,
+            audio_by_lang=audio_by_lang,
+        )
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+
+        print(traceback.format_exc(), flush=True)
+        try:
+            await _pg_set_status(article_id, "failed", f"変換エラー: {exc}"[:300])
+        except Exception:  # noqa: BLE001
+            pass
+
+
+@app.post("/api/articles")
+async def create_article(
+    req: SubmitRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(_current_user),
+) -> dict:
+    """本人の記事を新規登録（認証必須）。syncnews.articles に行を作り変換を開始。"""
+    url = (req.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URLが不正です")
+    conn = await _pg()
+    try:
+        aid = await conn.fetchval(
+            """
+            insert into syncnews.articles (user_id, source_url, source_lang, status)
+            values ($1, $2, 'ja', 'pending') returning id
+            """,
+            user_id, url,
+        )
+    finally:
+        await conn.close()
+    background_tasks.add_task(_run_pipeline_v2, str(aid), user_id, url)
+    return {"ok": True, "article_id": str(aid)}
+
+
+async def _delete_article_v2(article_id: str, owner_id: str) -> dict:
+    """新経路の削除（本人のみ）。非公開バケットの音声を消し、syncnews 行を削除
+    （cascade で vault も消える）。進行中ならチェックポイントが中断を検知する。"""
+    sb = _supabase()
+    try:
+        items = sb.storage.from_(_AUDIO_PRIVATE_BUCKET).list(article_id)
+        paths = [f"{article_id}/{it['name']}" for it in items]
+        if paths:
+            sb.storage.from_(_AUDIO_PRIVATE_BUCKET).remove(paths)
+    except Exception:  # noqa: BLE001
+        import traceback
+
+        print(traceback.format_exc(), flush=True)
+    conn = await _pg()
+    try:
+        await conn.execute(
+            "delete from syncnews.articles where id = $1 and user_id = $2",
+            article_id, owner_id,
+        )
+    finally:
+        await conn.close()
+    return {"ok": True}
