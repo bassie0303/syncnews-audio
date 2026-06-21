@@ -64,6 +64,35 @@ _ELEVEN_MODEL = "eleven_multilingual_v2"
 _AZURE_VOICE_JA = os.environ.get("AZURE_VOICE_JA", "ja-JP-NanamiNeural")
 
 
+_azure_libs_loaded = False
+
+
+def _ensure_azure_libs() -> None:
+    """Azure Speech SDK のネイティブ依存を解決する（import 前に呼ぶ）。
+
+    Railway の nixpacks は apt 導入の lib を /usr/lib/x86_64-linux-gnu に置くが、
+    Nix版 Python のローダはそこを探索しない（ldconfigキャッシュも使わない）ため
+    `libuuid.so.1 ...` で import に失敗する。そこで該当 lib を ctypes で
+    RTLD_GLOBAL 先読みし、後続の SDK ロード時に依存が解決されるようにする。
+    ローカル(macOS)等で存在しない場合は無視する。
+    """
+    global _azure_libs_loaded
+    if _azure_libs_loaded:
+        return
+    import ctypes
+    import glob
+
+    libdir = "/usr/lib/x86_64-linux-gnu"
+    # 依存順: crypto -> ssl。uuid / asound は独立。
+    for name in ("libcrypto.so.3", "libssl.so.3", "libuuid.so.1", "libasound.so.2"):
+        for path in glob.glob(f"{libdir}/{name}"):
+            try:
+                ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+    _azure_libs_loaded = True
+
+
 def _openai() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
@@ -105,6 +134,7 @@ def diag() -> dict:
     """デプロイ診断: Azure SDK のネイティブ依存が解決でき import 可能か（課金なし）。"""
     out: dict = {"azure_region": os.environ.get("AZURE_SPEECH_REGION")}
     try:
+        _ensure_azure_libs()
         import azure.cognitiveservices.speech as speechsdk  # noqa: F401
 
         out["azure_import"] = True
@@ -788,6 +818,7 @@ def _azure_tts_ja(sentences: list[str]) -> tuple[bytes, list[dict]]:
     ・<bookmark mark='i'/> を各文の直前に置くと、bookmark_reached の audio_offset
       がその文の開始時刻（100ns単位）になる。文末＝次文の開始（最後は総尺）。
     """
+    _ensure_azure_libs()  # ネイティブ依存(libuuid等)を先読みしてから import
     import azure.cognitiveservices.speech as speechsdk  # 遅延import（起動を軽く）
 
     if not sentences:

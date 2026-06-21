@@ -7,11 +7,11 @@ builder = "nixpacks"
 # 日本語ペイロードを ascii で encode しようとして UnicodeEncodeError になる。
 # 起動コマンドで明示し、env 注入タイミングに依存させない。
 #
-# LD_LIBRARY_PATH: apt導入のネイティブlib（libuuid/libasound 等）は
-# /usr/lib/x86_64-linux-gnu にあるが、Nix版Pythonのローダは既定で
-# /usr/lib しか見ず（システムのldconfigキャッシュを使わない）解決に失敗する。
-# 既存値を保ったまま当該ディレクトリを先頭に追加して Azure SDK を import 可能にする。
-startCommand = "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH} python -X utf8 -m uvicorn main:app --host 0.0.0.0 --port ${PORT}"
+# ※ apt導入のネイティブlib(/usr/lib/x86_64-linux-gnu)は Nix版Pythonのローダが
+#   探索しないため、startCommand での LD_LIBRARY_PATH 注入は不可（Railwayが
+#   インライン代入を解釈せずコンテナ起動が壊れる）。代わりに main.py 側で
+#   ctypes 先読み(_ensure_azure_libs)して Azure SDK の依存を解決している。
+startCommand = "python -X utf8 -m uvicorn main:app --host 0.0.0.0 --port ${PORT}"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
