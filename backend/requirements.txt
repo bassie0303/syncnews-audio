@@ -13,6 +13,10 @@ httpx==0.27.2
 # Supabase（Postgres tracks/segments + Storage 音声アップロード）
 supabase==2.10.0
 
+# 金庫スキーマ(syncnews_vault)への直接Postgres接続（PostgREST不可のため）。
+# Supabase Session pooler 経由。DATABASE_URL を使用。
+asyncpg==0.31.0
+
 # 日本語の漢字読み精度向上（旧: 合成前にカナ読みへ変換）。
 # ※日本語TTSは Azure に移行したため現状は未使用。英語経路や将来用に残置。
 sudachipy==0.6.11

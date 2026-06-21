@@ -38,6 +38,7 @@ import json  # noqa: E402
 
 import html as _html  # noqa: E402
 
+import asyncpg  # noqa: E402
 import httpx  # noqa: E402
 from fastapi import BackgroundTasks, FastAPI, Request  # noqa: E402
 from fastapi.responses import HTMLResponse  # noqa: E402
@@ -759,3 +760,131 @@ async def synthesize_segments(display_text: str, lang: Lang) -> tuple[bytes, lis
 
     audio, char_ts = await tts_with_timestamps(display_text, lang)
     return audio, aggregate_to_sentences(char_ts)
+
+
+# ─────────────────────────────────────────────────────────────
+# 二スキーマ移行用の新経路（syncnews + syncnews_vault + 非公開バケット）
+#
+# ※まだ /api/convert・/api/playback には配線していない（Stage 5 のフリップで切替）。
+#   金庫(syncnews_vault)は PostgREST から到達不能なので、直接 Postgres 接続
+#   （DATABASE_URL / Session pooler）で読み書きする。音声は非公開バケットに置き、
+#   再生時に短期署名URL（6時間）を発行して渡す（公開URLは作らない）。
+# ─────────────────────────────────────────────────────────────
+
+_AUDIO_PRIVATE_BUCKET = "audio-private"
+_SIGNED_URL_TTL = 6 * 3600  # 署名URL有効期限（秒）= 6時間
+
+
+async def _pg() -> asyncpg.Connection:
+    """金庫等への直結接続。Pooler 経由のため prepared statement cache を無効化。"""
+    return await asyncpg.connect(os.environ["DATABASE_URL"], statement_cache_size=0)
+
+
+async def persist_article_new(
+    *,
+    article_id: str,
+    owner_id: str,
+    source_url: str,
+    source_lang: Lang,
+    status: str,
+    title: str,
+    published_at,
+    segments_by_lang: dict[str, list[dict]],
+    audio_by_lang: dict[str, bytes],
+) -> None:
+    """変換結果を新構成へ保存する。
+
+    - syncnews.articles（公開メタ・所有者付き） … 直結 upsert
+    - syncnews_vault.article_titles / segments（第三者著作物） … 直結
+    - 音声 … 非公開バケット audio-private（`{id}/{lang}.mp3`、公開URLは作らない）
+    """
+    sb = _supabase()
+    for lang, audio in audio_by_lang.items():
+        sb.storage.from_(_AUDIO_PRIVATE_BUCKET).upload(
+            f"{article_id}/{lang}.mp3",
+            audio,
+            {"content-type": "audio/mpeg", "upsert": "true"},
+        )
+
+    conn = await _pg()
+    try:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                insert into syncnews.articles
+                    (id, user_id, source_url, source_lang, status, published_at)
+                values ($1, $2, $3, $4, $5, $6)
+                on conflict (id) do update set
+                    status = excluded.status,
+                    source_lang = excluded.source_lang,
+                    published_at = excluded.published_at
+                """,
+                article_id, owner_id, source_url, source_lang, status, published_at,
+            )
+            await conn.execute(
+                """
+                insert into syncnews_vault.article_titles (article_id, title)
+                values ($1, $2)
+                on conflict (article_id) do update set title = excluded.title
+                """,
+                article_id, title,
+            )
+            for lang, segs in segments_by_lang.items():
+                await conn.execute(
+                    "delete from syncnews_vault.segments where article_id = $1 and lang = $2",
+                    article_id, lang,
+                )
+                await conn.executemany(
+                    """
+                    insert into syncnews_vault.segments
+                        (article_id, lang, idx, text, start_ms, end_ms)
+                    values ($1, $2, $3, $4, $5, $6)
+                    """,
+                    [
+                        (article_id, lang, i, s["text"], s["start_ms"], s["end_ms"])
+                        for i, s in enumerate(segs)
+                    ],
+                )
+    finally:
+        await conn.close()
+
+
+async def build_playback_payload(article_id: str, owner_id: str) -> dict | None:
+    """再生ゲート用ペイロード（本人確認込み）。Stage3 のエンドポイントから使う。
+
+    本人が所有する記事のときだけ、本文セグメント（日英）＋タイトル＋音声の署名URL（6h）を返す。
+    他人の/存在しない記事は None。
+    """
+    conn = await _pg()
+    try:
+        owns = await conn.fetchrow(
+            "select id from syncnews.articles where id = $1 and user_id = $2",
+            article_id, owner_id,
+        )
+        if not owns:
+            return None
+        title = await conn.fetchval(
+            "select title from syncnews_vault.article_titles where article_id = $1",
+            article_id,
+        )
+        segments: dict[str, list[dict]] = {}
+        for lang in ("ja", "en"):
+            rows = await conn.fetch(
+                """
+                select idx, text, start_ms, end_ms from syncnews_vault.segments
+                where article_id = $1 and lang = $2 order by idx
+                """,
+                article_id, lang,
+            )
+            segments[lang] = [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+    sb = _supabase()
+    audio: dict[str, str] = {}
+    for lang in ("ja", "en"):
+        signed = sb.storage.from_(_AUDIO_PRIVATE_BUCKET).create_signed_url(
+            f"{article_id}/{lang}.mp3", _SIGNED_URL_TTL
+        )
+        audio[lang] = signed.get("signedURL") or signed.get("signedUrl")
+    return {"title": title, "segments": segments, "audio": audio}
