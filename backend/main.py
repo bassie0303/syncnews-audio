@@ -291,66 +291,98 @@ def submit(req: SubmitRequest, background_tasks: BackgroundTasks) -> dict:
     return {"ok": True, "accepted": True, "article_id": row["id"]}
 
 
-@app.get("/submit", response_class=HTMLResponse)
-def submit_page(url: str = "") -> str:
-    """ブックマークレットが開くポップアップ。同一オリジンで /api/submit を叩く。
-
-    クロスオリジン preflight(CORS) を避けるため、登録ページを backend 自身が配信し、
-    そこから同一オリジンの fetch で POST する。結果を日本語で表示する。
-    """
-    safe_url = _html.escape(url, quote=True)
-    return f"""<!doctype html>
+_SUBMIT_PAGE_TEMPLATE = """<!doctype html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SyncNews Audio に登録</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  :root {{ color-scheme: light dark; }}
-  body {{ font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
-         margin: 0; padding: 28px; background: #f7f7fb; color: #1f2430; }}
-  .brand {{ font-weight: 700; color: #4F46E5; font-size: 14px; letter-spacing: .04em; }}
-  h1 {{ font-size: 20px; margin: 12px 0 8px; }}
-  .url {{ font-size: 12px; color: #6b7280; word-break: break-all;
-         background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; }}
-  .status {{ margin-top: 18px; font-size: 16px; min-height: 24px; }}
-  .ok {{ color: #16a34a; font-weight: 600; }}
-  .err {{ color: #dc2626; font-weight: 600; }}
-  .hint {{ margin-top: 16px; font-size: 12px; color: #6b7280; }}
-  button {{ margin-top: 18px; background: #4F46E5; color: #fff; border: 0;
-           border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer; }}
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+         margin: 0; padding: 24px; background: #f7f7fb; color: #1f2430; }
+  .brand { font-weight: 700; color: #4F46E5; font-size: 14px; letter-spacing: .04em; }
+  h1 { font-size: 19px; margin: 10px 0 8px; }
+  .url { font-size: 12px; color: #6b7280; word-break: break-all;
+         background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; }
+  .status { margin-top: 14px; font-size: 15px; min-height: 22px; }
+  .ok { color: #16a34a; font-weight: 600; }
+  .err { color: #dc2626; font-weight: 600; }
+  .hint { margin-top: 14px; font-size: 12px; color: #6b7280; }
+  #login { margin-top: 14px; display: none; }
+  input { width: 100%; box-sizing: border-box; padding: 9px 10px; margin: 5px 0;
+          border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+  button { margin-top: 10px; background: #4F46E5; color: #fff; border: 0;
+           border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
+  .close { background: #e5e7eb; color: #1f2430; }
 </style></head>
 <body>
   <div class="brand">SyncNews Audio</div>
   <h1>記事を登録</h1>
-  <div class="url" id="url">{safe_url}</div>
-  <div class="status" id="status">登録中…</div>
-  <div class="hint">変換にはしばらくかかります。アプリの一覧で進捗（コンバート中…→準備完了）が表示されます。</div>
-  <button onclick="window.close()">閉じる</button>
+  <div class="url" id="url"></div>
+  <div id="login">
+    <input id="email" type="email" placeholder="メールアドレス" autocomplete="username" />
+    <input id="password" type="password" placeholder="パスワード" autocomplete="current-password" />
+    <button id="loginbtn">ログインして登録</button>
+  </div>
+  <div class="status" id="status">準備中…</div>
+  <div class="hint">変換にはしばらくかかります。アプリの一覧で進捗（コンバート中…→準備完了）が表示されます。<br>
+    ※ログインは初回のみ。次回からはこの小窓を開くだけで登録できます。</div>
+  <button class="close" onclick="window.close()">閉じる</button>
 <script>
-  const url = {json.dumps(url)};
+  const SUPA_URL = __SUPA_URL__;
+  const SUPA_ANON = __SUPA_ANON__;
+  const articleUrl = __ARTICLE_URL__;
   const $ = (id) => document.getElementById(id);
-  (async () => {{
-    if (!url) {{ $('status').className='status err'; $('status').textContent='URLが取得できませんでした'; return; }}
-    try {{
-      const res = await fetch('/api/submit', {{
+  const sb = supabase.createClient(SUPA_URL, SUPA_ANON);
+  $('url').textContent = articleUrl || '(URLが取得できませんでした)';
+
+  function setStatus(msg, cls) { $('status').className = 'status ' + (cls || ''); $('status').textContent = msg; }
+  function showLogin() { $('login').style.display = 'block'; setStatus('ログインして登録してください'); }
+
+  async function doSubmit(token) {
+    if (!articleUrl) { setStatus('URLが取得できませんでした', 'err'); return; }
+    setStatus('登録中…');
+    try {
+      const res = await fetch('/api/articles', {
         method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ url }}),
-      }});
-      const data = await res.json();
-      if (data.ok) {{
-        $('status').className = 'status ok';
-        $('status').textContent = '✅ 登録しました！変換を開始しました。';
-      }} else {{
-        $('status').className = 'status err';
-        $('status').textContent = '登録に失敗: ' + (data.error || '不明なエラー');
-      }}
-    }} catch (e) {{
-      $('status').className = 'status err';
-      $('status').textContent = '通信に失敗しました: ' + e;
-    }}
-  }})();
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ url: articleUrl }),
+      });
+      if (res.ok) { setStatus('✅ 登録しました！変換を開始しました。', 'ok'); }
+      else if (res.status === 401) { setStatus('セッションが切れています。再ログインしてください。', 'err'); showLogin(); }
+      else { setStatus('登録に失敗: ' + res.status + ' ' + (await res.text()), 'err'); }
+    } catch (e) { setStatus('通信に失敗しました: ' + e, 'err'); }
+  }
+
+  $('loginbtn').onclick = async () => {
+    setStatus('ログイン中…');
+    const r = await sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
+    if (r.error) { setStatus('ログイン失敗: ' + r.error.message, 'err'); }
+    else { $('login').style.display = 'none'; doSubmit(r.data.session.access_token); }
+  };
+
+  (async () => {
+    const { data } = await sb.auth.getSession();
+    if (data && data.session) { doSubmit(data.session.access_token); }
+    else { showLogin(); }
+  })();
 </script>
 </body></html>"""
+
+
+@app.get("/submit", response_class=HTMLResponse)
+def submit_page(url: str = "") -> str:
+    """ブックマークレットが開く登録ポップアップ（認証対応）。
+
+    初回はメール＋パスワードでログイン（Supabaseのセッションをブラウザに保存）、
+    以降はそのまま登録できる。同一オリジンの POST /api/articles を JWT 付きで
+    叩くので CORS は不要。本人の記事として新経路（金庫＋非公開バケット）に登録される。
+    """
+    return (
+        _SUBMIT_PAGE_TEMPLATE.replace("__SUPA_URL__", json.dumps(os.environ.get("SUPABASE_URL", "")))
+        .replace("__SUPA_ANON__", json.dumps(os.environ.get("SUPABASE_ANON_KEY", "")))
+        .replace("__ARTICLE_URL__", json.dumps(url))
+    )
 
 
 @app.get("/bookmarklet", response_class=HTMLResponse)
