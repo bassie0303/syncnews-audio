@@ -38,7 +38,6 @@ import json  # noqa: E402
 
 import html as _html  # noqa: E402
 
-import asyncpg  # noqa: E402
 import httpx  # noqa: E402
 from fastapi import (  # noqa: E402
     BackgroundTasks,
@@ -848,8 +847,14 @@ _AUDIO_PRIVATE_BUCKET = "audio-private"
 _SIGNED_URL_TTL = 6 * 3600  # 署名URL有効期限（秒）= 6時間
 
 
-async def _pg() -> asyncpg.Connection:
-    """金庫等への直結接続。Pooler 経由のため prepared statement cache を無効化。"""
+async def _pg():
+    """金庫等への直結接続。Pooler 経由のため prepared statement cache を無効化。
+
+    import を関数内に遅延させ、万一 asyncpg の依存解決に失敗しても
+    既存エンドポイント（/api/health, /api/convert 等）が巻き添えにならないようにする。
+    """
+    import asyncpg
+
     return await asyncpg.connect(os.environ["DATABASE_URL"], statement_cache_size=0)
 
 
