@@ -47,7 +47,8 @@
   - `GET /submit`: supabase-js でブラウザにセッション保存。**初回のみメール＋パスワードでログイン**、以降は小窓を開くだけ。同一オリジンで JWT 付き POST（CORS不要）。
   - `GET /bookmarklet`: ブックマークバーにドラッグする導入ページ。
   - **有料会員ページ対応**: ブックマークレットが現在ページの `outerHTML` を postMessage で小窓へ渡し、`/api/articles {url, html}` で送る。サーバは html があれば取得せずそれを使う（利用者が閲覧権を持つ本文を処理）。※本文がHTMLに無い記事（日経 紙面 `/paper/article/` 等、専用ビューア型）は対象外。
-  - [ ] 残: **ブラウザ拡張機能を認証対応に更新**（`extension/` は旧 anon `/api/submit` のままで、新方式（認証＋新経路）に未対応）。Chrome Web Store 公開も未。
+  - [x] **ブラウザ拡張機能（認証対応 v2）** — `extension/`（Chrome/Edge MV3）。ポップアップでログイン（Supabase Auth・`chrome.storage.local` にセッション保存）→「この記事を登録」で現在タブの URL＋HTML を `POST /api/articles`（JWT）へ送信。有料会員ページ対応。旧 anon `background.js` 方式は廃止。
+  - [ ] 残: 拡張の **Chrome Web Store 公開**（現状ローカル読み込みのみ）。
 
 ## 既知の不具合
 - [x] **一覧がアプリ復帰時に空になることがある** — ストリームをフィールド保持し、`resumed` で再購読＋一発 `fetchList()` で即補完。直前の一覧を保持して再購読中の一時的な空emitでも表示維持。プルリフレッシュ（RefreshIndicator）も追加。

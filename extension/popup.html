@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+           width: 280px; margin: 0; padding: 16px; color: #1f2430; background: #fff; }
+    .brand { font-weight: 700; color: #4F46E5; font-size: 13px; letter-spacing: .04em; }
+    h1 { font-size: 15px; margin: 6px 0 10px; }
+    .url { font-size: 11px; color: #6b7280; word-break: break-all; margin-bottom: 10px;
+           max-height: 48px; overflow: hidden; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 9px; margin: 4px 0;
+            border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px; }
+    button { width: 100%; background: #4F46E5; color: #fff; border: 0; border-radius: 8px;
+             padding: 9px 12px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+    button:disabled { opacity: .6; cursor: default; }
+    .status { margin-top: 10px; font-size: 13px; min-height: 18px; }
+    .ok { color: #16a34a; font-weight: 600; }
+    .err { color: #dc2626; font-weight: 600; }
+    .row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+    .link { background: none; color: #6b7280; border: 0; width: auto; padding: 0; margin: 0;
+            font-size: 11px; font-weight: 400; cursor: pointer; text-decoration: underline; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="brand">SyncNews Audio</div>
+  <h1 id="heading">この記事を登録</h1>
+  <div class="url" id="url"></div>
+
+  <!-- 未ログイン -->
+  <div id="login" class="hidden">
+    <input id="email" type="email" placeholder="メールアドレス" autocomplete="username" />
+    <input id="password" type="password" placeholder="パスワード" autocomplete="current-password" />
+    <button id="loginbtn">ログイン</button>
+  </div>
+
+  <!-- ログイン済み -->
+  <div id="main" class="hidden">
+    <button id="registerbtn">この記事を登録</button>
+    <div class="row">
+      <span id="who" style="font-size:11px;color:#6b7280;"></span>
+      <button id="logout" class="link">ログアウト</button>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script src="config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
